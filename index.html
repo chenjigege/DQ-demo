@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智能贴纸 AI (Smart Sticker AI)</title>
+    <!-- 引入 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 Babel 用于解析 JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Tailwind 配置 -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        ai: {
+                            purple: '#A78BFA',
+                            blue: '#60A5FA',
+                            dark: '#0F172A',
+                        }
+                    },
+                    animation: {
+                        'blob': 'blob 7s infinite',
+                        'float': 'float 6s ease-in-out infinite',
+                        'pulse-slow': 'pulse 4s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                        'scanline': 'scanline 8s linear infinite',
+                    },
+                    keyframes: {
+                        blob: {
+                            '0%': { transform: 'translate(0px, 0px) scale(1)' },
+                            '33%': { transform: 'translate(30px, -50px) scale(1.1)' },
+                            '66%': { transform: 'translate(-20px, 20px) scale(0.9)' },
+                            '100%': { transform: 'translate(0px, 0px) scale(1)' },
+                        },
+                        float: {
+                            '0%, 100%': { transform: 'translateY(0)' },
+                            '50%': { transform: 'translateY(-20px)' },
+                        },
+                        scanline: {
+                            '0%': { transform: 'translateY(-100%)' },
+                            '100%': { transform: 'translateY(100%)' }
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255, 0.1); border-radius: 4px; }
+        
+        .glass-panel {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .ai-sphere {
+            background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.9) 0%, rgba(167,139,250,0.8) 20%, rgba(124,58,237,0.8) 50%, rgba(76,29,149,0.9) 100%);
+            box-shadow: 0 0 80px rgba(139,92,246,0.5);
+        }
+
+        .scanlines {
+            background: linear-gradient(
+                to bottom,
+                rgba(255,255,255,0),
+                rgba(255,255,255,0) 50%,
+                rgba(0,0,0,0.2) 50%,
+                rgba(0,0,0,0.2)
+            );
+            background-size: 100% 4px;
+        }
+    </style>
+</head>
+<body>
+    <div id="root" class="h-screen w-full flex flex-col items-center justify-center bg-slate-900"></div>
+
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useRef } from 'https://esm.sh/react@18.2.0';
+        import { createRoot } from 'https://esm.sh/react-dom@18.2.0/client';
+        import { 
+            Mic, PenTool, Camera, Loader2, Check, RotateCcw, Printer, Scissors, Sparkles, 
+            Wifi, Battery, ChevronLeft, ChevronRight, Trophy, Lock, Star, Crown,
+            ArrowRight, Zap
+        } from 'https://esm.sh/lucide-react@0.263.1';
+
+        const BASE_AI_RESULTS = [
+            { id: 1, name: "太空喵喵", color: "bg-blue-500/20 text-blue-300 border-blue-500/50", icon: "🐱", desc: "宇航员风格", rarity: 'common' },
+            { id: 2, name: "摇滚恐龙", color: "bg-green-500/20 text-green-300 border-green-500/50", icon: "🦖", desc: "朋克吉他手", rarity: 'common' },
+            { id: 3, name: "魔法独角兽", color: "bg-purple-500/20 text-purple-300 border-purple-500/50", icon: "🦄", desc: "彩虹梦幻", rarity: 'common' },
+            { id: 4, name: "赛博机器人", color: "bg-red-500/20 text-red-300 border-red-500/50", icon: "🤖", desc: "未来科技感", rarity: 'common' },
+        ];
+        
+        const HIDDEN_STICKERS = [
+            { id: 99, name: "黄金巨龙", color: "bg-yellow-500/20 text-yellow-300 border-yellow-500/50", icon: "🐉", desc: "传说级隐藏款", rarity: 'legendary' },
+        ];
+
+        const ACHIEVEMENT_LIST = [
+            { id: 'first_print', name: "初级创客", desc: "完成第1次制作", icon: <Scissors size={18}/> },
+            { id: 'collector', name: "收藏家", desc: "累计制作3个贴纸", icon: <Star size={18}/> },
+            { id: 'lucky_star', name: "欧皇附体", desc: "刷出传说级隐藏款", icon: <Crown size={18}/> },
+            { id: 'artist', name: "灵魂画手", desc: "使用手绘模式", icon: <PenTool size={18}/> },
+        ];
+
+        function StickerMachineUI() {
+            const [phase, setPhase] = useState('HOME');
+            const [inputType, setInputType] = useState('VOICE'); 
+            const [selectedIndex, setSelectedIndex] = useState(0); 
+            
+            const [printProgress, setPrintProgress] = useState(0);
+            const [printStatus, setPrintStatus] = useState('');
+            
+            const [currentResults, setCurrentResults] = useState(BASE_AI_RESULTS);
+            const [printCount, setPrintCount] = useState(0);
+            const [unlockedAchievements, setUnlockedAchievements] = useState([]);
+            const [newAchievement, setNewAchievement] = useState(null);
+            const [inputSimulating, setInputSimulating] = useState(false);
+
+            const MENU_ITEMS = [
+                { id: 'VOICE', label: '语音', icon: Mic, prompt: "请告诉我，你想做什么贴纸？" },
+                { id: 'DRAW', label: '手绘', icon: PenTool, prompt: "画出你心中的想法..." },
+                { id: 'PHOTO', label: '拍照', icon: Camera, prompt: "拍一张照片给 AI 看看" },
+                { id: 'ACHIEVEMENTS', label: '成就', icon: Trophy, prompt: "查看我的收藏柜" },
+            ];
+
+            // 统一的旋钮/确认键处理逻辑
+            const handleKnobPress = () => {
+                // 如果有弹窗，先关闭弹窗
+                if (newAchievement) {
+                    setNewAchievement(null);
+                    return;
+                }
+
+                // 根据当前不同阶段，执行不同逻辑
+                if (phase === 'HOME') {
+                    confirmSelection();
+                } else if (phase === 'SELECTION') {
+                    startPrinting();
+                } else if (phase === 'DONE' || phase === 'ACHIEVEMENTS') {
+                    resetMachine();
+                }
+            };
+
+            useEffect(() => {
+                const handleKeyDown = (e) => {
+                    if (e.key === 'Enter') {
+                        handleKnobPress();
+                        return;
+                    }
+
+                    // 左右键逻辑
+                    if (phase === 'HOME') {
+                        if (e.key === 'ArrowRight') setSelectedIndex((prev) => (prev + 1) % MENU_ITEMS.length);
+                        if (e.key === 'ArrowLeft') setSelectedIndex((prev) => (prev - 1 + MENU_ITEMS.length) % MENU_ITEMS.length);
+                    } 
+                    else if (phase === 'SELECTION') {
+                        if (e.key === 'ArrowRight') setSelectedIndex((prev) => (prev + 1) % currentResults.length);
+                        if (e.key === 'ArrowLeft') setSelectedIndex((prev) => (prev - 1 + currentResults.length) % currentResults.length);
+                    }
+                };
+
+                window.addEventListener('keydown', handleKeyDown);
+                return () => window.removeEventListener('keydown', handleKeyDown);
+            }, [phase, selectedIndex, currentResults, newAchievement]);
+
+            const confirmSelection = () => {
+                const selectedMode = MENU_ITEMS[selectedIndex].id;
+                
+                if (selectedMode === 'ACHIEVEMENTS') {
+                    setPhase('ACHIEVEMENTS');
+                } else {
+                    setInputType(selectedMode);
+                    startInputSimulation(selectedMode);
+                }
+            };
+
+            const unlockAchievement = (id) => {
+                if (!unlockedAchievements.includes(id)) {
+                    setUnlockedAchievements(prev => [...prev, id]);
+                    const ach = ACHIEVEMENT_LIST.find(a => a.id === id);
+                    setNewAchievement(ach);
+                    return true;
+                }
+                return false;
+            };
+
+            const startInputSimulation = (mode) => {
+                setPhase('INPUT');
+                setInputSimulating(true);
+
+                setTimeout(() => {
+                    setInputSimulating(false);
+                    setPhase('PROCESSING');
+                    
+                    setTimeout(() => {
+                        let results = [...BASE_AI_RESULTS];
+                        if (Math.random() < 0.3) {
+                            results[3] = HIDDEN_STICKERS[0];
+                        }
+                        setCurrentResults(results);
+                        setPhase('SELECTION');
+                        setSelectedIndex(0);
+                    }, 2500);
+                }, 2000);
+            };
+
+            const startPrinting = () => {
+                setPhase('PRINTING');
+                setPrintProgress(0);
+                let progress = 0;
+                const interval = setInterval(() => {
+                    progress += 1.5;
+                    setPrintProgress(progress);
+                    if (progress < 60) setPrintStatus('正在高清喷墨...');
+                    else if (progress < 90) setPrintStatus('智能刀模切割中...');
+                    else setPrintStatus('即将完成...');
+
+                    if (progress >= 100) {
+                        clearInterval(interval);
+                        handlePrintComplete();
+                    }
+                }, 50);
+            };
+
+            const handlePrintComplete = () => {
+                setPhase('DONE');
+                const newCount = printCount + 1;
+                setPrintCount(newCount);
+                setTimeout(() => {
+                    if (newCount === 1) unlockAchievement('first_print');
+                    if (newCount === 3) unlockAchievement('collector');
+                    if (inputType === 'DRAW') unlockAchievement('artist');
+                    const selectedItem = currentResults[selectedIndex];
+                    if (selectedItem?.rarity === 'legendary') unlockAchievement('lucky_star');
+                }, 500);
+            };
+
+            const resetMachine = () => {
+                setPhase('HOME');
+                setSelectedIndex(0); 
+                setPrintProgress(0);
+                setInputType('VOICE');
+                setNewAchievement(null);
+            };
+
+            const AISphere = ({ state = 'IDLE' }) => {
+                return (
+                    <div className="relative w-32 h-32 md:w-40 md:h-40 flex items-center justify-center">
+                        {state === 'THINKING' && (
+                            <>
+                                <div className="absolute top-0 -left-4 w-24 h-24 bg-purple-500 rounded-full filter blur-xl opacity-40 animate-blob"></div>
+                                <div className="absolute top-0 -right-4 w-24 h-24 bg-blue-500 rounded-full filter blur-xl opacity-40 animate-blob animation-delay-2000"></div>
+                                <div className="absolute -bottom-8 left-10 w-24 h-24 bg-pink-500 rounded-full filter blur-xl opacity-40 animate-blob animation-delay-4000"></div>
+                            </>
+                        )}
+                        <div className={`ai-sphere rounded-full w-full h-full relative z-10 transition-all duration-700 ${state === 'LISTENING' ? 'scale-110 animate-pulse-slow' : 'animate-float'}`}>
+                            <div className="absolute inset-0 rounded-full bg-gradient-to-t from-transparent via-white/10 to-white/30"></div>
+                        </div>
+                    </div>
+                );
+            };
+
+            const StatusBar = () => (
+                <div className="absolute top-0 left-0 right-0 h-10 flex justify-between items-center px-6 text-gray-400 text-xs font-mono font-medium z-20 border-b border-gray-800 bg-gray-900/50 backdrop-blur-sm">
+                    <span className="flex items-center gap-1 text-purple-400"><Zap size={10} className="fill-current"/> AI CORE ONLINE</span>
+                    <div className="flex items-center gap-3">
+                        <Wifi size={14} />
+                        <span className="text-green-400">100%</span>
+                        <Battery size={14} className="text-green-400" />
+                    </div>
+                </div>
+            );
+
+            // 1. 横屏首页 (Home) - 左右布局
+            const renderHome = () => {
+                const activeItem = MENU_ITEMS[selectedIndex];
+                
+                return (
+                    <div className="flex h-full w-full items-center justify-center pt-10 pb-6 relative z-10 px-8">
+                        {/* 左侧：AI 球 */}
+                        <div className="w-1/2 flex flex-col items-center justify-center border-r border-gray-800 pr-8">
+                            <AISphere state={activeItem.id === 'VOICE' ? 'LISTENING' : 'IDLE'} />
+                            
+                            <div className="mt-6 text-center space-y-2 animate-enter">
+                                <h1 className="text-2xl font-bold text-white tracking-tight">
+                                    下午好，小创客
+                                </h1>
+                                <p className={`text-lg transition-all duration-300 ${activeItem.id === 'VOICE' ? 'text-purple-300 font-bold' : 'text-gray-500'}`}>
+                                    {activeItem.prompt}
+                                </p>
+                            </div>
+                        </div>
+
+                        {/* 右侧：输入选项 */}
+                        <div className="w-1/2 flex flex-col items-center justify-center pl-8">
+                            <div className={`
+                                w-full max-w-sm h-20 mb-8 rounded-full glass-panel flex items-center px-4 transition-all duration-300
+                                ${activeItem.id === 'VOICE' ? 'shadow-[0_0_20px_rgba(139,92,246,0.3)] border-purple-500/50' : 'border-gray-700'}
+                            `}>
+                                <div className="w-12 h-12 rounded-full bg-gray-800 flex items-center justify-center text-gray-400 shrink-0">
+                                    <activeItem.icon size={24} />
+                                </div>
+                                <div className="flex-1 mx-4 text-gray-300 text-sm">
+                                    {activeItem.id === 'VOICE' ? (
+                                        <div className="flex items-center gap-1 h-full">
+                                            <div className="w-1 h-4 bg-purple-400 rounded-full animate-[bounce_1s_infinite]"></div>
+                                            <div className="w-1 h-6 bg-purple-400 rounded-full animate-[bounce_1.2s_infinite]"></div>
+                                            <div className="w-1 h-5 bg-purple-400 rounded-full animate-[bounce_0.8s_infinite]"></div>
+                                            <div className="w-1 h-3 bg-purple-400 rounded-full animate-[bounce_1.1s_infinite]"></div>
+                                            <span className="ml-3 text-purple-300 font-medium text-lg">聆听中...</span>
+                                        </div>
+                                    ) : (
+                                        <span className="text-lg">按下旋钮确认 {activeItem.label}</span>
+                                    )}
+                                </div>
+                                <div className="w-10 h-10 rounded-full bg-gray-800 text-white flex items-center justify-center border border-gray-600 animate-pulse">
+                                    <ArrowRight size={20} />
+                                </div>
+                            </div>
+
+                            {/* Dock */}
+                            <div className="flex justify-between items-center w-full max-w-sm px-2">
+                                {MENU_ITEMS.map((item, idx) => {
+                                    const isActive = selectedIndex === idx;
+                                    return (
+                                        <div 
+                                            key={item.id}
+                                            className={`
+                                                flex flex-col items-center gap-2 transition-all duration-300 relative
+                                                ${isActive ? 'scale-110 -translate-y-1' : 'opacity-40 scale-100'}
+                                            `}
+                                        >
+                                            <div className={`
+                                                w-14 h-14 rounded-2xl flex items-center justify-center transition-all duration-300 border
+                                                ${isActive ? 'bg-gray-800 border-purple-500 text-purple-300 shadow-[0_0_15px_rgba(168,85,247,0.3)]' : 'bg-transparent border-transparent text-gray-500'}
+                                            `}>
+                                                <item.icon size={26} strokeWidth={isActive ? 2.5 : 2} />
+                                            </div>
+                                            <span className={`text-xs font-medium ${isActive ? 'text-gray-300' : 'text-transparent'}`}>
+                                                {item.label}
+                                            </span>
+                                            {isActive && <div className="absolute -bottom-2 w-1.5 h-1.5 rounded-full bg-purple-500"></div>}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    </div>
+                );
+            };
+
+            const renderInput = () => (
+                <div className="flex flex-col h-full items-center justify-center animate-enter z-10 relative">
+                    <AISphere state="THINKING" />
+                    <div className="mt-8 text-center">
+                        <h2 className="text-2xl font-bold text-white mb-2">
+                            {inputType === 'VOICE' && "正在分析你的声音..."}
+                            {inputType === 'DRAW' && "正在扫描你的画作..."}
+                            {inputType === 'PHOTO' && "正在识别物体..."}
+                        </h2>
+                        <div className="flex gap-2 justify-center mt-4">
+                            <span className="w-3 h-3 bg-purple-500 rounded-full animate-bounce"></span>
+                            <span className="w-3 h-3 bg-purple-500 rounded-full animate-bounce delay-100"></span>
+                            <span className="w-3 h-3 bg-purple-500 rounded-full animate-bounce delay-200"></span>
+                        </div>
+                    </div>
+                </div>
+            );
+
+            const renderProcessing = () => (
+                <div className="flex flex-col h-full items-center justify-center relative overflow-hidden z-10">
+                    <div className="z-10 text-center">
+                        <Sparkles size={64} className="text-purple-400 mx-auto mb-8 animate-spin-slow" />
+                        <h2 className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-400">
+                            AI 正在创造
+                        </h2>
+                        <p className="text-gray-500 mt-4 text-lg font-mono">NEURAL ENGINE PROCESSING...</p>
+                    </div>
+                </div>
+            );
+
+            // 4. 横屏选择 (Selection)
+            const renderSelection = () => (
+                <div className="flex flex-col h-full pt-14 pb-4 px-6 z-10 relative">
+                    <div className="text-center mb-4">
+                        <h2 className="text-xl font-bold text-white">选择一个设计</h2>
+                        <p className="text-gray-500 text-sm">为你生成了 {currentResults.length} 个方案</p>
+                    </div>
+
+                    <div className="flex-1 flex items-center justify-center perspective-1000">
+                         <div className="relative w-full h-72 flex items-center justify-center">
+                            {currentResults.map((item, idx) => {
+                                const offset = idx - selectedIndex; 
+                                const isActive = idx === selectedIndex;
+                                const isHidden = item.rarity === 'legendary';
+                                
+                                // 横屏可以展示更多，左右各展示2个（虽然数据只有4个，但逻辑通用）
+                                if (Math.abs(offset) > 2 && !isActive) return null;
+
+                                return (
+                                    <div 
+                                        key={item.id}
+                                        className={`
+                                            absolute w-56 h-72 rounded-3xl p-4 flex flex-col items-center justify-between shadow-2xl transition-all duration-500 border-2
+                                            ${isActive 
+                                                ? 'z-30 scale-110 opacity-100 bg-gray-800 border-purple-500 shadow-[0_0_30px_rgba(168,85,247,0.3)]' 
+                                                : 'z-20 scale-90 opacity-40 bg-gray-900 border-gray-700'}
+                                        `}
+                                        style={{
+                                            // 调整横向间距
+                                            transform: isActive 
+                                                ? 'translateX(0) scale(1.1) rotateY(0deg)' 
+                                                : `translateX(${offset * 140}%) scale(0.85) rotateY(${offset * 15}deg) translateZ(-50px)`
+                                        }}
+                                    >
+                                        {isHidden && (
+                                            <div className="absolute top-2 right-2 bg-yellow-500 text-black text-xs font-bold px-2 py-0.5 rounded-full z-30">
+                                                SSR
+                                            </div>
+                                        )}
+                                        
+                                        <div className={`w-32 h-32 rounded-full flex items-center justify-center text-6xl mt-4 border-2 ${item.color}`}>
+                                            {item.icon}
+                                        </div>
+                                        
+                                        <div className="text-center mb-2">
+                                            <h3 className={`font-bold text-lg ${isHidden ? 'text-yellow-400' : 'text-white'}`}>{item.name}</h3>
+                                            <p className="text-xs text-gray-500 mt-1">{item.desc}</p>
+                                        </div>
+
+                                        {isActive && (
+                                            <div className="w-10 h-10 rounded-full bg-purple-600 text-white flex items-center justify-center animate-bounce">
+                                                <Check size={20} />
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                         </div>
+                    </div>
+                    
+                    <div className="flex justify-center gap-2 mt-4">
+                        {currentResults.map((_, idx) => (
+                            <div key={idx} className={`h-1.5 rounded-full transition-all ${idx === selectedIndex ? 'w-8 bg-purple-500' : 'w-1.5 bg-gray-700'}`} />
+                        ))}
+                    </div>
+                </div>
+            );
+
+            const renderPrinting = () => (
+                <div className="flex flex-col h-full items-center justify-center px-8 z-10 relative">
+                    <div className="w-40 h-40 relative mb-8">
+                         <svg className="w-full h-full transform -rotate-90">
+                            <circle cx="80" cy="80" r="70" stroke="#374151" strokeWidth="10" fill="transparent" />
+                            <circle 
+                                cx="80" cy="80" r="70" 
+                                stroke="#8b5cf6" 
+                                strokeWidth="10" 
+                                fill="transparent" 
+                                strokeDasharray={440} 
+                                strokeDashoffset={440 - (440 * printProgress) / 100}
+                                className="transition-all duration-300 ease-linear"
+                            />
+                         </svg>
+                         <div className="absolute inset-0 flex items-center justify-center">
+                            {printProgress < 60 ? <Printer size={40} className="text-blue-400" /> : <Scissors size={40} className="text-orange-400" />}
+                         </div>
+                    </div>
+                    <h3 className="text-3xl font-bold text-white font-mono">{printProgress}%</h3>
+                    <p className="text-gray-400 mt-2 text-lg">{printStatus}</p>
+                </div>
+            );
+
+            const renderDone = () => {
+                const item = currentResults[selectedIndex];
+                const isHidden = item?.rarity === 'legendary';
+
+                return (
+                    <div className="flex flex-col h-full items-center justify-center text-center animate-enter pb-10 z-10 relative">
+                        <div className="relative">
+                            {isHidden ? (
+                                <div className="absolute -inset-10 bg-yellow-500/20 rounded-full blur-xl animate-pulse"></div>
+                            ) : (
+                                <div className="absolute -inset-10 bg-green-500/20 rounded-full blur-xl animate-pulse"></div>
+                            )}
+                            <div className="w-56 h-56 bg-gray-800 rounded-[2rem] shadow-2xl flex items-center justify-center text-9xl relative z-10 border border-gray-700">
+                                {item?.icon}
+                            </div>
+                            <div className="absolute -bottom-6 -right-6 bg-green-500 text-white p-4 rounded-3xl shadow-lg z-20 border-4 border-gray-900">
+                                <Check size={32} strokeWidth={3} />
+                            </div>
+                        </div>
+                        
+                        <h2 className="text-3xl font-bold text-white mt-12 mb-2">制作完成!</h2>
+                        <p className="text-gray-400 text-base">请从取物口领取你的贴纸</p>
+                    </div>
+                );
+            };
+
+            // 7. 横屏成就 (Achievements) - 4列布局
+            const renderAchievements = () => (
+                <div className="flex flex-col h-full pt-16 px-10 z-10 relative">
+                    <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-3">
+                        <Trophy className="text-yellow-500" size={28} /> 我的成就
+                    </h2>
+                    <div className="grid grid-cols-4 gap-4 overflow-y-auto custom-scrollbar pb-4">
+                        {ACHIEVEMENT_LIST.map((ach) => {
+                            const isUnlocked = unlockedAchievements.includes(ach.id);
+                            return (
+                                <div key={ach.id} className={`p-4 rounded-2xl border flex flex-col items-center text-center justify-center aspect-square ${isUnlocked ? 'bg-gray-800 border-yellow-500/30 shadow-lg' : 'bg-gray-900/50 border-gray-800 opacity-50'}`}>
+                                    <div className={`w-12 h-12 rounded-full flex items-center justify-center mb-3 ${isUnlocked ? 'bg-yellow-500/20 text-yellow-400' : 'bg-gray-800 text-gray-600'}`}>
+                                        {isUnlocked ? ach.icon : <Lock size={20} />}
+                                    </div>
+                                    <div className={`font-bold text-sm ${isUnlocked ? 'text-white' : 'text-gray-500'}`}>{ach.name}</div>
+                                    <div className="text-[10px] text-gray-500 mt-1 leading-tight">{isUnlocked ? ach.desc : "???"}</div>
+                                </div>
+                            )
+                        })}
+                    </div>
+                    <div className="mt-auto py-4 text-center">
+                         <div 
+                           onClick={resetMachine}
+                           className="inline-flex items-center gap-2 px-6 py-2 bg-gray-800 rounded-full text-sm text-gray-400 border border-gray-700 cursor-pointer hover:bg-gray-700 transition-colors"
+                         >
+                            <RotateCcw size={14} /> 按下旋钮返回
+                         </div>
+                    </div>
+                </div>
+            );
+
+            const AchievementPopup = () => {
+                if (!newAchievement) return null;
+                return (
+                    <div className="absolute inset-0 z-50 flex items-center justify-center p-8 bg-black/80 backdrop-blur-sm animate-enter">
+                        <div className="bg-gray-800 p-8 rounded-3xl shadow-2xl max-w-sm w-full text-center border border-yellow-500/30">
+                            <div className="w-20 h-20 bg-yellow-500/20 rounded-full flex items-center justify-center mx-auto mb-6 text-yellow-400 animate-bounce">
+                                <Trophy size={40} />
+                            </div>
+                            <h3 className="text-yellow-500 font-bold text-xl mb-2">解锁新成就!</h3>
+                            <h2 className="text-2xl text-white font-bold mb-4">{newAchievement.name}</h2>
+                            <button 
+                                onClick={() => setNewAchievement(null)}
+                                className="mt-4 px-8 py-3 bg-yellow-600 hover:bg-yellow-500 text-white rounded-full text-base font-bold shadow-lg transition-colors"
+                            >
+                                太棒了!
+                            </button>
+                        </div>
+                    </div>
+                );
+            };
+
+            const ControlPanel = () => (
+                <div className="mt-8 flex flex-col items-center gap-4 relative z-50 select-none">
+                    <div className="relative group">
+                        <div className="w-32 h-32 rounded-full bg-gradient-to-br from-gray-700 to-gray-900 shadow-[0_20px_40px_rgba(0,0,0,0.5)] flex items-center justify-center border-4 border-gray-600 relative active:scale-95 transition-transform ring-4 ring-black/30">
+                           <div className="absolute inset-0 rounded-full bg-[radial-gradient(circle_at_30%_30%,_rgba(255,255,255,0.1),_transparent)]"></div>
+                           <div className="absolute inset-2 rounded-full border-[2px] border-gray-600 border-dashed opacity-30"></div>
+                           
+                           {/* 修复：这里不再硬编码调用 confirmSelection，
+                             而是调用 handleKnobPress，它会根据当前是否在成就页来决定是“确认”还是“返回”。
+                           */}
+                           <button 
+                             onClick={handleKnobPress}
+                             className="w-16 h-16 rounded-full bg-gradient-to-b from-gray-200 to-gray-400 shadow-[0_4px_10px_rgba(0,0,0,0.3),inset_0_2px_4px_rgba(255,255,255,0.5)] flex items-center justify-center z-10 active:shadow-[inset_0_4px_10px_rgba(0,0,0,0.4)]"
+                           >
+                             <div className="text-[10px] font-black text-gray-500/50 tracking-widest">PUSH</div>
+                           </button>
+
+                           <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"><ChevronLeft size={20} /></div>
+                           <div className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500"><ChevronRight size={20} /></div>
+                        </div>
+                        
+                        <div className="absolute inset-y-0 left-0 w-1/3 cursor-pointer z-20" onClick={() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft' }))} />
+                        <div className="absolute inset-y-0 right-0 w-1/3 cursor-pointer z-20" onClick={() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }))} />
+                    </div>
+                    
+                    <div className="px-4 py-1 bg-gray-800 rounded-full border border-gray-700 text-gray-400 text-xs font-mono">
+                        PHYSICAL_CONTROL_UNIT
+                    </div>
+                </div>
+            );
+
+            return (
+                <div className="h-screen w-full flex flex-col items-center justify-center p-4 font-sans overflow-hidden relative">
+                    <div className="absolute inset-0 bg-slate-900">
+                        <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] bg-[size:40px_40px]"></div>
+                        <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,transparent_0%,rgba(15,23,42,0.8)_100%)]"></div>
+                    </div>
+
+                    {/* 设备外壳 (横屏工控平板) */}
+                    <div className="relative bg-gray-800 p-6 rounded-[2rem] shadow-[0_30px_60px_-15px_rgba(0,0,0,0.8),inset_0_1px_1px_rgba(255,255,255,0.1)] w-full max-w-4xl aspect-[16/10] shrink-0 z-10 transition-transform duration-500 border-4 border-gray-700">
+                        
+                        {/* 顶部传感器孔位 (横屏) */}
+                        <div className="absolute top-3 left-1/2 -translate-x-1/2 flex gap-3 z-20">
+                            <div className="w-1.5 h-1.5 rounded-full bg-black/80"></div>
+                            <div className="w-8 h-1.5 rounded-full bg-black/80"></div>
+                        </div>
+
+                        {/* 屏幕区域 */}
+                        <div className="w-full h-full bg-black rounded-[1.5rem] p-[2px] overflow-hidden relative shadow-inner ring-4 ring-gray-900">
+                            {/* 屏幕内容区 */}
+                            <div className="w-full h-full bg-slate-950 rounded-[1.4rem] overflow-hidden relative flex flex-col">
+                                <div className="absolute inset-0 scanlines opacity-10 pointer-events-none z-0"></div>
+                                <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_30%,rgba(59,130,246,0.15),transparent_60%)] z-0"></div>
+                                
+                                <StatusBar />
+                                <div className="flex-1 relative">
+                                    {phase === 'HOME' && renderHome()}
+                                    {phase === 'INPUT' && renderInput()}
+                                    {phase === 'PROCESSING' && renderProcessing()}
+                                    {phase === 'SELECTION' && renderSelection()}
+                                    {phase === 'PRINTING' && renderPrinting()}
+                                    {phase === 'DONE' && renderDone()}
+                                    {phase === 'ACHIEVEMENTS' && renderAchievements()}
+                                    <AchievementPopup />
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <ControlPanel />
+                </div>
+            );
+        }
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<StickerMachineUI />);
+    </script>
+</body>
+</html>
